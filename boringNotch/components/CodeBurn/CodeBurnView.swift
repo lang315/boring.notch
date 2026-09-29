@@ -62,6 +62,7 @@ struct CodeBurnView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.gray)
+                .accessibilityLabel("Refresh")
             }
         }
     }
@@ -112,6 +113,7 @@ struct CodeBurnView: View {
                 Text(verbatim: payload.formatCost(current.cost))
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
                 stat("\(current.calls) calls")
                 stat("\(payload.sessionsText) sessions")
                 stat("\(Int(current.cacheHitPercent.rounded()))% cache")
@@ -151,6 +153,7 @@ struct CodeBurnView: View {
                 Text(footer)
                     .font(.caption2)
                     .foregroundStyle(.gray)
+                    .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
