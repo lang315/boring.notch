@@ -1,0 +1,189 @@
+//
+//  CodeBurnPayload.swift
+//  boringNotch
+//
+//  The subset of `codeburn status --format menubar-json` that the CodeBurn tab
+//  renders. Foundation-only so scripts/codeburn-check.sh can compile it standalone.
+//
+
+import Foundation
+
+enum CodeBurnPeriod: String, CaseIterable, Identifiable {
+    case today
+    case week
+    case thirtyDays = "30days"
+    case month
+
+    var id: String { rawValue }
+    var cliArg: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .today: return "Today"
+        case .week: return "7d"
+        case .thirtyDays: return "30d"
+        case .month: return "Month"
+        }
+    }
+}
+
+enum CodeBurnFetchError: Error, Equatable {
+    case notInstalled
+    case busy
+    case timeout
+    case failed
+    case decode
+
+    /// Maps the XPC helper's reply code (see CodeBurnRunner) to an app error.
+    init(helperCode: String?) {
+        switch helperCode {
+        case "not-installed": self = .notInstalled
+        case "busy": self = .busy
+        case "timeout": self = .timeout
+        default: self = .failed
+        }
+    }
+}
+
+struct CodeBurnPayload: Decodable, Equatable {
+    struct Currency: Decodable, Equatable {
+        var code: String
+        var symbol: String
+        var rate: Double
+
+        init(code: String = "USD", symbol: String = "$", rate: Double = 1) {
+            self.code = code
+            self.symbol = symbol
+            self.rate = rate
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            code = try c.decodeIfPresent(String.self, forKey: .code) ?? "USD"
+            symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? "$"
+            rate = try c.decodeIfPresent(Double.self, forKey: .rate) ?? 1
+        }
+
+        private enum CodingKeys: String, CodingKey { case code, symbol, rate }
+    }
+
+    struct Model: Decodable, Equatable {
+        let name: String
+        let cost: Double
+    }
+
+    struct Project: Decodable, Equatable {
+        /// Full project path when the CLI knows it.
+        let id: String?
+        /// Folder basename; two projects can share it.
+        let name: String
+        let cost: Double
+
+        var rowID: String { id ?? name }
+    }
+
+    struct Current: Decodable, Equatable {
+        let label: String
+        let cost: Double
+        let calls: Int
+        let sessions: Int
+        /// 0–100.
+        let cacheHitPercent: Double
+        /// Anything but `identity` means `sessions` is a lower bound.
+        let sessionCountBasis: String?
+        /// Sorted by cost, uncapped, may contain $0 rows.
+        let topModels: [Model]
+        /// Models that ran but have no price (shown as $0 upstream).
+        let unpricedModelCount: Int
+        let topProjects: [Project]
+
+        private enum CodingKeys: String, CodingKey {
+            case label, cost, calls, sessions, cacheHitPercent, sessionCountBasis
+            case topModels, unpricedModels, topProjects
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            label = try c.decode(String.self, forKey: .label)
+            cost = try c.decode(Double.self, forKey: .cost)
+            calls = try c.decode(Int.self, forKey: .calls)
+            sessions = try c.decode(Int.self, forKey: .sessions)
+            cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
+            sessionCountBasis = try c.decodeIfPresent(String.self, forKey: .sessionCountBasis)
+            topModels = try c.decodeIfPresent([Model].self, forKey: .topModels) ?? []
+            unpricedModelCount = try c.decodeIfPresent([Ignored].self, forKey: .unpricedModels)?.count ?? 0
+            topProjects = try c.decodeIfPresent([Project].self, forKey: .topProjects) ?? []
+        }
+    }
+
+    struct LiveSessions: Decodable, Equatable {
+        let count: Int
+
+        private enum CodingKeys: String, CodingKey { case sessions }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            count = try c.decodeIfPresent([Ignored].self, forKey: .sessions)?.count ?? 0
+        }
+    }
+
+    /// Consumes one JSON value without keeping it; used where only a count matters.
+    private struct Ignored: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    let generated: String
+    /// True when the CLI served older data because another process held its cache lock.
+    let stale: Bool?
+    let currency: Currency
+    let current: Current
+    /// Absent means "unknown", not zero.
+    let liveSessions: LiveSessions?
+
+    private enum CodingKeys: String, CodingKey { case generated, stale, currency, current, liveSessions }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated = try c.decode(String.self, forKey: .generated)
+        stale = try c.decodeIfPresent(Bool.self, forKey: .stale)
+        currency = try c.decodeIfPresent(Currency.self, forKey: .currency) ?? Currency()
+        current = try c.decode(Current.self, forKey: .current)
+        liveSessions = try c.decodeIfPresent(LiveSessions.self, forKey: .liveSessions)
+    }
+
+    // MARK: - Display
+
+    /// Payload costs are USD. JPY and KRW have no minor unit.
+    func formatCost(_ usd: Double) -> String {
+        let value = usd * currency.rate
+        if ["JPY", "KRW"].contains(currency.code) {
+            return "\(currency.symbol)\(Int(value.rounded()))"
+        }
+        return currency.symbol + String(format: "%.2f", value)
+    }
+
+    var sessionsText: String {
+        let basis = current.sessionCountBasis
+        let isExact = basis == nil || basis == "identity"
+        return (isExact ? "" : "≥") + "\(current.sessions)"
+    }
+
+    /// $0 rows (local, free or unpriced models) are left out; unpriced ones are counted separately.
+    var pricedModels: [Model] { current.topModels.filter { $0.cost > 0 } }
+
+    var generatedDate: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: generated) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: generated)
+    }
+
+    /// Freshness of the data itself (the CLI may serve a saved snapshot), not of the fetch.
+    static func ageText(since date: Date, now: Date = Date()) -> String {
+        let minutes = Int(max(0, now.timeIntervalSince(date)) / 60)
+        if minutes < 1 { return "now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        return "\(minutes / 60)h ago"
+    }
+}

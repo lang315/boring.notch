@@ -1,0 +1,40 @@
+{
+  "generated": "2026-09-29T09:09:22.900Z",
+  "currency": { "code": "USD", "symbol": "$", "rate": 1 },
+  "current": {
+    "label": "Today (2026-09-29)",
+    "cost": 149.9569006,
+    "calls": 1445,
+    "sessions": 45,
+    "sessionCountBasis": "partial",
+    "oneShotRate": 0.5555555555555556,
+    "inputTokens": 1838130,
+    "outputTokens": 1254155,
+    "cacheReadTokens": 292593822,
+    "cacheWriteTokens": 10273567,
+    "cacheHitPercent": 99.37570294680518,
+    "topModels": [
+      { "name": "Opus 5.5", "cost": 77.05049, "calls": 575, "savingsUSD": 0 },
+      { "name": "Sonnet 5.5", "cost": 40.1201, "calls": 400, "savingsUSD": 0 },
+      { "name": "Haiku 4.5", "cost": 9.3, "calls": 300, "savingsUSD": 0 },
+      { "name": "GPT-5", "cost": 6.1, "calls": 20, "savingsUSD": 0 },
+      { "name": "local-llama", "cost": 0, "calls": 150, "savingsUSD": 1.2 }
+    ],
+    "unpricedModels": [ { "model": "mystery-model", "calls": 3, "tokens": 1200 } ],
+    "topProjects": [
+      { "id": "/Users/dev/work/alpha", "name": "alpha", "cost": 99.4197856, "savingsUSD": 0, "sessions": 14 },
+      { "id": "/Users/dev/other/alpha", "name": "alpha", "cost": 30.12, "savingsUSD": 0, "sessions": 5 },
+      { "name": "beta", "cost": 12.5, "savingsUSD": 0, "sessions": 3 }
+    ],
+    "providers": { "claude": 149.9569006 }
+  },
+  "optimize": { "findingCount": 0, "savingsUSD": 0, "topFindings": [] },
+  "history": { "daily": [] },
+  "liveSessions": {
+    "windowSeconds": 600,
+    "sessions": [
+      { "id": "s1", "provider": "claude", "project": "alpha" },
+      { "id": "s2", "provider": "codex", "project": "beta" }
+    ]
+  }
+}
