@@ -241,6 +241,27 @@ final class XPCHelperClient: NSObject {
             return false
         }
     }
+
+    // MARK: - CodeBurn
+
+    nonisolated func codeBurnStatus(period: String) async -> Result<Data, CodeBurnFetchError> {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            let (data, code): (Data?, String?) = try await service.withContinuation { service, continuation in
+                service.fetchCodeBurnStatus(period: period) { data, code in
+                    continuation.resume(returning: (data, code))
+                }
+            }
+            if let data {
+                return .success(data)
+            }
+            return .failure(CodeBurnFetchError(helperCode: code))
+        } catch {
+            return .failure(.failed)
+        }
+    }
 }
 
 extension Notification.Name {

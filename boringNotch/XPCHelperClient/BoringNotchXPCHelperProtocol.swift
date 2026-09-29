@@ -20,5 +20,7 @@ import Foundation
     func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void)
     func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void)
+    // CodeBurn CLI (spawned by the unsandboxed helper; the app sandbox can't read ~/.claude)
+    func fetchCodeBurnStatus(period: String, with reply: @escaping (Data?, String?) -> Void)
 }
 
