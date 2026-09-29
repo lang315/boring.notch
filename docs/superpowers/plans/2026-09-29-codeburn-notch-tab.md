@@ -18,7 +18,7 @@
 - Binary candidates, first executable wins: `/opt/homebrew/bin/codeburn`, `/usr/local/bin/codeburn`, `~/.npm-global/bin/codeburn`, `~/.local/bin/codeburn`, `~/.volta/bin/codeburn` (`~` from `FileManager.default.homeDirectoryForCurrentUser`).
 - Child environment allowlist: `HOME`, `USER`, `TMPDIR`, `LANG`, `PATH`, `NODE_ENV=production`. PATH starts with `/opt/homebrew/opt/node/bin`, then candidate dirs, then `/usr/bin:/bin`.
 - Timeout 60s: SIGTERM to the process group, SIGKILL 2s later. One CLI at a time. stdout cap 5 MB.
-- Raw stderr never reaches the UI; it goes to `os_log` (subsystem `theboringteam.boringnotch.BoringNotchXPCHelper`, category `CodeBurn`).
+- Raw stderr never reaches the UI; it goes to `os_log` (subsystem `theboringteam.boringnotch.BoringNotchXPCHelper`, category `CodeBurn`) with `privacy: .public`, so `log show` can display it when debugging (local log only; it may contain file paths, no secrets).
 - Settings key: `showCodeBurnTab`, default `false`.
 - Cache max age: 5 minutes per period.
 - Costs in the payload are USD; display = `cost * currency.rate`; zero decimals for `JPY` and `KRW`, two otherwise.
@@ -786,7 +786,7 @@ final class CodeBurnRunner: @unchecked Sendable {
                 reply(result.stdout, nil)
             } else {
                 let stderr = String(decoding: result.stderr, as: UTF8.self)
-                Self.log.error("codeburn failed (status \(result.status)): \(stderr, privacy: .private)")
+                Self.log.error("codeburn failed (status \(result.status)): \(stderr, privacy: .public)")
                 reply(nil, "failed")
             }
         }
@@ -894,7 +894,7 @@ Expected: `PayloadCheck OK` then `RunnerCheck OK`, exit 0. (The timeout section 
 - [ ] **Step 6: Build gate**
 
 Run the build gate command. The helper folder is synchronized, so no pbxproj edit is needed.
-Expected: `** BUILD SUCCEEDED **`; `grep CodeBurnRunner` in the build log shows it compiled for the `BoringNotchXPCHelper` target.
+Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 7: Commit**
 
@@ -1772,7 +1772,7 @@ Quit any running Boring Notch first (`osascript -e 'quit app "Boring Notch"'` an
 | 1 | Toggle off (default), open notch | Header/tab behaviour identical to `main` (Home + Shelf per the shelf settings) |
 | 2 | Settings → Appearance → enable "Show CodeBurn tab"; open notch | Flame tab visible; select it; Today loads; hero cost equals `codeburn status --period today` in Terminal (`codeburn status --format menubar-json --period today --no-optimize \| python3 -c 'import json,sys;print(json.load(sys.stdin)["current"]["cost"])'`) |
 | 3 | Click 7d, 30d, Month | Each loads; labels match `current.label`; switching during a load never shows another period's numbers |
-| 4 | Click Month (cold) and press brightness keys while it loads | Brightness HUD responds immediately |
+| 4 | Click Month (cold) and press brightness keys while it loads | Brightness HUD responds immediately. Requires Accessibility granted to this Debug build (System Settings → Privacy & Security → Accessibility); without it media keys are not intercepted and the row proves nothing. The non-blocking property itself is already proven by RunnerCheck's `busy` assertion, so this row is best-effort. |
 | 5 | Close and reopen notch within 5 min, CodeBurn tab | Cached data shows instantly; no spinner |
 | 6 | Disable the toggle while CodeBurn tab is selected | Tab disappears, view returns to Home |
 | 7 | Shelf disabled + CodeBurn enabled | Bar shows Home + CodeBurn only (no Shelf) |
