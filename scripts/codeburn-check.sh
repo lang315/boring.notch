@@ -13,3 +13,8 @@ swiftc -parse-as-library -o "$OUT/payload" \
 swiftc -parse-as-library -o "$OUT/runner" \
   "$C/Check.swift" "$C/RunnerCheck.swift" "$ROOT/BoringNotchXPCHelper/CodeBurnRunner.swift"
 "$OUT/runner"
+
+swiftc -parse-as-library -o "$OUT/manager" \
+  "$C/Check.swift" "$C/ManagerCheck.swift" \
+  "$ROOT/boringNotch/models/CodeBurnPayload.swift" "$ROOT/boringNotch/managers/CodeBurnManager.swift"
+"$OUT/manager"
