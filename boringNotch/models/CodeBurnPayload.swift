@@ -89,7 +89,7 @@ struct CodeBurnPayload: Decodable, Equatable {
         let sessions: Int
         /// 0–100.
         let cacheHitPercent: Double
-        /// Anything but `identity` means `sessions` is a lower bound.
+        /// Exact only when `identity`; absent or anything else means `sessions` is a lower bound.
         let sessionCountBasis: String?
         /// Sorted by cost, uncapped, may contain $0 rows.
         let topModels: [Model]
@@ -163,8 +163,7 @@ struct CodeBurnPayload: Decodable, Equatable {
     }
 
     var sessionsText: String {
-        let basis = current.sessionCountBasis
-        let isExact = basis == nil || basis == "identity"
+        let isExact = current.sessionCountBasis == "identity"
         return (isExact ? "" : "≥") + "\(current.sessions)"
     }
 

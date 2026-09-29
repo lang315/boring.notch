@@ -43,6 +43,7 @@ enum PayloadCheck {
          "current":{"label":"Month","cost":1.5,"calls":1,"sessions":1,"cacheHitPercent":0,"topModels":[],"topProjects":[]}}
         """)
         check(noCurrency.formatCost(1.5) == "$1.50", "default currency: \(noCurrency.formatCost(1.5))")
+        check(noCurrency.sessionsText == "≥1", "absent basis is a lower bound: \(noCurrency.sessionsText)")
 
         // Fresh user: CLI exits 0 with zeros and empty arrays.
         let empty = try decode("""
