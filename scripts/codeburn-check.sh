@@ -9,3 +9,7 @@ trap 'rm -rf "$OUT"' EXIT
 swiftc -parse-as-library -o "$OUT/payload" \
   "$C/Check.swift" "$C/PayloadCheck.swift" "$ROOT/boringNotch/models/CodeBurnPayload.swift"
 "$OUT/payload" "$C"
+
+swiftc -parse-as-library -o "$OUT/runner" \
+  "$C/Check.swift" "$C/RunnerCheck.swift" "$ROOT/BoringNotchXPCHelper/CodeBurnRunner.swift"
+"$OUT/runner"
