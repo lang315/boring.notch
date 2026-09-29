@@ -94,6 +94,36 @@ enum RunnerCheck {
         check(grandchild > 0 && kill(grandchild, 0) != 0, "grandchild \(grandchild) was killed with the process group")
         check(call(slow, "today").code == "timeout", "runner is free again after a timeout")
 
+        // A descendant that leaves the process group keeps the pipes open: the runner
+        // must still reply "timeout" once and free itself instead of staying busy.
+        let escapedPidFile = dir.appendingPathComponent("escaped.pid")
+        func killEscaped() {
+            let pid = pid_t((try? String(contentsOf: escapedPidFile, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+            if pid > 0 { kill(pid, SIGKILL) }
+        }
+        let escaper = CodeBurnRunner(candidates: [try fake("escape", """
+            perl -e 'use POSIX; POSIX::setsid(); open(F, ">", $ARGV[0]); print F $$; close F; sleep 20' '\(escapedPidFile.path)' &
+            exit 0
+            """)], timeout: 1)
+        var escapeReplies = 0
+        var escapeCode: String?
+        let escaped = DispatchSemaphore(value: 0)
+        escaper.run(period: "today") { _, code in
+            escapeReplies += 1
+            escapeCode = code
+            escaped.signal()
+        }
+        let escapedReplied = escaped.wait(timeout: .now() + 8) == .success
+        killEscaped()
+        check(escapedReplied, "escaped descendant: no reply within 8s")
+        check(escapeCode == "timeout", "escaped descendant code: \(escapeCode ?? "nil")")
+        Thread.sleep(forTimeInterval: 1)
+        check(escapeReplies == 1, "escaped descendant: exactly one reply, got \(escapeReplies)")
+        let afterEscape = call(escaper, "today", wait: 8).code
+        killEscaped()
+        check(afterEscape == "timeout", "runner is free after an escaped descendant: \(afterEscape ?? "nil")")
+
         print("RunnerCheck OK")
     }
 }

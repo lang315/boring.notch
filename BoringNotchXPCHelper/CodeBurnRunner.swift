@@ -93,22 +93,27 @@ final class CodeBurnRunner: @unchecked Sendable {
         done.enter()
         DispatchQueue.global().async {
             var status: Int32 = 0
-            waitpid(pid, &status, 0)
+            while waitpid(pid, &status, 0) == -1 {
+                if errno == EINTR { continue }
+                status = 1 << 8 // reaping failed: never report success
+                break
+            }
             job.setStatus(status)
             done.leave()
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            guard job.markTimedOut() else { return }
-            kill(-pid, SIGTERM)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                if !job.isFinished { kill(-pid, SIGKILL) }
-            }
-        }
-        done.notify(queue: .global()) { [self] in
+        // Whichever of the pipe-EOF path and the escape path wins job.finish() replies and
+        // releases; the loser does neither (a late release() would clear a newer run's claim).
+        let conclude = { [self] (result: Job.Result, escaped: Bool) in
             // The pipes must outlive run(): dropping them closes the read ends and the
             // child dies of SIGPIPE on its first write.
-            withExtendedLifetime((stdoutPipe, stderrPipe)) {}
-            let result = job.finish()
+            withExtendedLifetime((stdoutPipe, stderrPipe)) {
+                if escaped {
+                    for pipe in [stdoutPipe, stderrPipe] {
+                        pipe.fileHandleForReading.readabilityHandler = nil
+                        try? pipe.fileHandleForReading.close()
+                    }
+                }
+            }
             release()
             let exitedCleanly = result.status & 0x7f == 0 && (result.status >> 8) & 0xff == 0
             if result.timedOut {
@@ -124,6 +129,25 @@ final class CodeBurnRunner: @unchecked Sendable {
                 Self.log.error("codeburn failed (status \(result.status)): \(stderr, privacy: .public)")
                 reply(nil, "failed")
             }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            guard job.markTimedOut() else { return }
+            kill(-pid, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                if job.isFinished { return }
+                kill(-pid, SIGKILL)
+                // A descendant that left the group (setsid) can still hold the pipes open,
+                // so EOF may never come: stop waiting for it.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    guard let result = job.finish() else { return }
+                    Self.log.error("codeburn descendant escaped the process group and kept the pipes open")
+                    conclude(result, true)
+                }
+            }
+        }
+        done.notify(queue: .global()) {
+            guard let result = job.finish() else { return }
+            conclude(result, false)
         }
     }
 
@@ -211,9 +235,13 @@ final class CodeBurnRunner: @unchecked Sendable {
             return finished
         }
 
-        func finish() -> (stdout: Data, stderr: Data, status: Int32, timedOut: Bool, overflowed: Bool) {
+        typealias Result = (stdout: Data, stderr: Data, status: Int32, timedOut: Bool, overflowed: Bool)
+
+        /// The result on the first call only; later calls get nil, so exactly one path replies.
+        func finish() -> Result? {
             lock.lock()
             defer { lock.unlock() }
+            if finished { return nil }
             finished = true
             return (stdout, stderr, status, timedOut, overflowed)
         }
