@@ -23,6 +23,14 @@ xcodebuild -project boringNotch.xcodeproj -scheme boringNotch -configuration Deb
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
 open "$TMPDIR/boringnotch-dd-signed/Build/Products/Debug/Boring Notch.app"   # product name has a space
 
+# Ad-hoc signed Release build to install locally. Release enables the hardened runtime, and with an
+# ad-hoc signature library validation then refuses the embedded MediaRemoteAdapter.framework
+# ("different Team IDs" at launch), so turn it off for local installs only.
+xcodebuild -project boringNotch.xcodeproj -scheme boringNotch -configuration Release \
+  -destination 'platform=macOS' -derivedDataPath "$TMPDIR/boringnotch-dd-signed" \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO build
+ditto "$TMPDIR/boringnotch-dd-signed/Build/Products/Release/Boring Notch.app" "/Applications/Boring Notch.app"
+
 # Verify the privilege split: app-sandbox should be true for the app and false for the helper
 codesign -d --entitlements - "<app>"
 codesign -d --entitlements - "<app>/Contents/XPCServices/BoringNotchXPCHelper.xpc"
