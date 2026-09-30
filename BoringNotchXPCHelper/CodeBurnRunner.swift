@@ -28,10 +28,7 @@ final class CodeBurnRunner: @unchecked Sendable {
     }
 
     static func defaultCandidates(home: URL) -> [URL] {
-        let fixed = ["/opt/homebrew/bin/codeburn", "/usr/local/bin/codeburn"].map { URL(fileURLWithPath: $0) }
-            + [".npm-global/bin", ".local/bin", ".volta/bin"].map {
-                home.appendingPathComponent($0).appendingPathComponent("codeburn")
-            }
+        let fixed = fixedCandidateDirs(home: home).map { URL(fileURLWithPath: $0).appendingPathComponent("codeburn") }
         let direct = [".bun/bin/codeburn", "Library/pnpm/codeburn"].map { home.appendingPathComponent($0) }
         // Version managers keep one install per node version; list those that exist, newest first.
         let managers: [(root: String, suffix: String)] = [
@@ -51,7 +48,11 @@ final class CodeBurnRunner: @unchecked Sendable {
         return fixed + direct + versioned
     }
 
-    private static let fixedCandidateCount = 5
+    private static func fixedCandidateDirs(home: URL) -> [String] {
+        ["/opt/homebrew/bin", "/usr/local/bin"] + [".npm-global/bin", ".local/bin", ".volta/bin"].map {
+            home.appendingPathComponent($0).path
+        }
+    }
 
     /// Explicit allowlist: nothing from the helper's own environment (PATH included) reaches
     /// the CLI (drops NODE_OPTIONS, NODE_PATH, DYLD_* and friends). PATH leads with the
@@ -64,7 +65,7 @@ final class CodeBurnRunner: @unchecked Sendable {
         }
         var path: [String] = []
         let dirs = [binary.deletingLastPathComponent().path, "/opt/homebrew/opt/node/bin"]
-            + candidates.prefix(fixedCandidateCount).map { $0.deletingLastPathComponent().path } + ["/usr/bin", "/bin"]
+            + fixedCandidateDirs(home: home) + ["/usr/bin", "/bin"]
         for dir in dirs where !path.contains(dir) {
             path.append(dir)
         }
@@ -155,6 +156,9 @@ final class CodeBurnRunner: @unchecked Sendable {
             finished = true
             timers.forEach { $0.cancel() }
             sources.forEach { $0.cancel() } // cancel handlers close the fds
+            // Break the timers -> block -> schedule -> timers cycle so the run's state is freed.
+            timers.removeAll()
+            sources.removeAll()
             release()
             let exitedCleanly = status & 0x7f == 0 && (status >> 8) & 0xff == 0
             if timedOut {

@@ -147,7 +147,9 @@ enum RunnerCheck {
             var set = sigset_t()
             sigemptyset(&set)
             sigaddset(&set, SIGTERM)
-            pthread_sigmask(SIG_BLOCK, &set, nil)
+            var old = sigset_t()
+            pthread_sigmask(SIG_BLOCK, &set, &old)
+            defer { pthread_sigmask(SIG_SETMASK, &old, nil) }
             sigRunner.run(period: "today") { _, code in
                 sigCode = code
                 sigDone.signal()
