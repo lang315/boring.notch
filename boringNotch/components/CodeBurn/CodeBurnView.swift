@@ -14,6 +14,14 @@ struct CodeBurnView: View {
         let id: String
         let name: String
         let cost: String
+        /// Cost relative to the largest in its column (0...1); sizes the spend bar.
+        let share: Double
+    }
+
+    private let ember = Color(red: 249 / 255, green: 115 / 255, blue: 22 / 255)
+    private let flame = Color(red: 239 / 255, green: 68 / 255, blue: 68 / 255)
+    private var emberGradient: LinearGradient {
+        LinearGradient(colors: [ember, flame], startPoint: .leading, endPoint: .trailing)
     }
 
     var body: some View {
@@ -34,7 +42,10 @@ struct CodeBurnView: View {
                 } label: {
                     Text(period.title)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(manager.period == period ? .white : .gray)
+                        .foregroundStyle(manager.period == period ? ember : .gray)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(manager.period == period ? ember.opacity(0.2) : .clear))
                 }
                 .buttonStyle(.plain)
             }
@@ -53,6 +64,7 @@ struct CodeBurnView: View {
             if manager.current.status == .loading {
                 ProgressView()
                     .controlSize(.mini)
+                    .tint(ember)
             } else {
                 Button {
                     manager.refresh()
@@ -90,10 +102,15 @@ struct CodeBurnView: View {
             case .idle, .loading:
                 ProgressView()
                     .controlSize(.small)
+                    .tint(ember)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(.notInstalled):
                 VStack(alignment: .leading, spacing: 4) {
-                    message("CodeBurn CLI not found")
+                    HStack(spacing: 6) {
+                        Image(systemName: "flame.fill")
+                            .foregroundStyle(ember)
+                        message("CodeBurn CLI not found")
+                    }
                     Text(verbatim: "brew install codeburn  ·  npm i -g codeburn")
                         .font(.caption.monospaced())
                         .foregroundStyle(.gray)
@@ -111,23 +128,32 @@ struct CodeBurnView: View {
         return HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: payload.formatCost(current.cost))
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(emberGradient)
                     .lineLimit(1)
-                stat("\(current.calls) calls")
+                    .minimumScaleFactor(0.7)
+                stat("\(current.calls.formatted()) calls")
                 stat("\(payload.sessionsText) sessions")
                 stat("\(Int(current.cacheHitPercent.rounded()))% cache")
                 if let live = payload.liveSessions {
-                    stat("● \(live.count) active ≤10m")
+                    (Text(verbatim: "● ").foregroundStyle(ember) + Text("\(live.count) active ≤10m"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.gray)
+                        .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            let models = payload.pricedModels.prefix(4)
+            let modelMax = models.map(\.cost).max() ?? 0
+            let projects = current.topProjects.prefix(4)
+            let projectMax = projects.map(\.cost).max() ?? 0
             list("MODELS",
-                 rows: payload.pricedModels.prefix(4).map { Row(id: $0.name, name: $0.name, cost: payload.formatCost($0.cost)) },
+                 rows: models.map { Row(id: $0.name, name: $0.name, cost: payload.formatCost($0.cost), share: modelMax > 0 ? $0.cost / modelMax : 0) },
                  footer: current.unpricedModelCount > 0 ? "+\(current.unpricedModelCount) unpriced" : nil)
             list("PROJECTS",
-                 rows: current.topProjects.prefix(4).map { Row(id: $0.rowID, name: $0.name, cost: payload.formatCost($0.cost)) },
+                 rows: projects.map { Row(id: $0.rowID, name: $0.name, cost: payload.formatCost($0.cost), share: projectMax > 0 ? $0.cost / projectMax : 0) },
                  footer: nil)
         }
     }
@@ -135,23 +161,34 @@ struct CodeBurnView: View {
     private func list(_ title: LocalizedStringKey, rows: [Row], footer: LocalizedStringKey?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.2)
                 .foregroundStyle(.gray)
             ForEach(rows) { row in
                 HStack(spacing: 6) {
                     Text(verbatim: row.name)
+                        .font(.system(size: 12))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
                     Text(verbatim: row.cost)
+                        .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
                 }
-                .font(.caption)
                 .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .background(alignment: .leading) {
+                    GeometryReader { proxy in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(emberGradient)
+                            .opacity(0.28)
+                            .frame(width: proxy.size.width * row.share)
+                    }
+                }
             }
             if let footer {
                 Text(footer)
-                    .font(.caption2)
+                    .font(.system(size: 10))
                     .foregroundStyle(.gray)
                     .lineLimit(1)
             }
@@ -161,14 +198,14 @@ struct CodeBurnView: View {
 
     private func stat(_ text: LocalizedStringKey) -> some View {
         Text(text)
-            .font(.caption)
+            .font(.system(size: 11))
             .foregroundStyle(.gray)
             .lineLimit(1)
     }
 
     private func message(_ text: LocalizedStringKey) -> some View {
         Text(text)
-            .font(.callout)
+            .font(.system(size: 13, design: .rounded))
             .foregroundStyle(.gray)
     }
 
