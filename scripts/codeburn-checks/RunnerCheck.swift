@@ -39,8 +39,7 @@ enum RunnerCheck {
             parent: ["USER": "tester", "TMPDIR": "/tmp/x", "LANG": "en_US.UTF-8", "HOME": "/elsewhere",
                      "NODE_OPTIONS": "--inspect", "NODE_PATH": "/evil", "DYLD_INSERT_LIBRARIES": "/evil.dylib",
                      "PATH": "/evil/bin"],
-            home: home, binary: URL(fileURLWithPath: "/Users/tester/.nvm/versions/node/v20.1.0/bin/codeburn"),
-            candidates: candidates)
+            home: home, binary: URL(fileURLWithPath: "/Users/tester/.nvm/versions/node/v20.1.0/bin/codeburn"))
         check(Set(env.keys) == ["HOME", "USER", "TMPDIR", "LANG", "PATH", "NODE_ENV"], "env keys: \(env.keys.sorted())")
         check(env["HOME"] == "/Users/tester", "HOME comes from the resolved home, not the parent")
         check(env["NODE_ENV"] == "production", "NODE_ENV")
@@ -107,6 +106,26 @@ enum RunnerCheck {
         let grandchild = pid_t(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         check(grandchild > 0 && kill(grandchild, 0) != 0, "grandchild \(grandchild) was killed with the process group")
         check(call(slow, "today").code == "timeout", "runner is free again after a timeout")
+
+        // A grandchild that ignores SIGTERM must still die when the leader exits on TERM.
+        let stubbornPidFile = dir.appendingPathComponent("stubborn.pid")
+        let stubborn = CodeBurnRunner(candidates: [try fake("stubborn", """
+            sh -c 'trap "" TERM; echo $$ > "\(stubbornPidFile.path)"; while :; do sleep 0.1; done' &
+            trap 'exit 0' TERM
+            while :; do sleep 0.1; done
+            """)], timeout: 1)
+        let stubbornResult = call(stubborn, "today")
+        var stubbornPid: pid_t = 0
+        for _ in 0..<30 {
+            stubbornPid = pid_t((try? String(contentsOf: stubbornPidFile, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+            if stubbornPid > 0 && kill(stubbornPid, 0) == -1 && errno == ESRCH { break }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let stubbornDead = stubbornPid > 0 && kill(stubbornPid, 0) == -1 && errno == ESRCH
+        if stubbornPid > 0 { kill(stubbornPid, SIGKILL) }
+        check(stubbornResult.code == "timeout", "stubborn grandchild: code \(stubbornResult.code ?? "nil")")
+        check(stubbornDead, "TERM-ignoring grandchild \(stubbornPid) survived the leader's exit")
 
         // Exit is authoritative: a clean exit whose descendant left the process group and
         // still holds the pipes replies with success at once, not after a timeout.

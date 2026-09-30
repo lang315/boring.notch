@@ -160,7 +160,7 @@ struct CodeBurnPayload: Decodable, Equatable {
     // MARK: - Display
 
     /// Payload costs are USD. Fraction digits come from the currency (JPY 0, USD 2).
-    /// A fresh formatter per call keeps this thread-safe; it runs a handful of times per render.
+    /// Deliberately uncached for simplicity: it runs about 9 times per render.
     func formatCost(_ usd: Double) -> String {
         let f = NumberFormatter()
         f.numberStyle = .currency

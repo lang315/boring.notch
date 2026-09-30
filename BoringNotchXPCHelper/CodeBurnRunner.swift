@@ -16,13 +16,13 @@ final class CodeBurnRunner: @unchecked Sendable {
 
     private static let log = os.Logger(subsystem: "theboringteam.boringnotch.BoringNotchXPCHelper", category: "CodeBurn")
 
-    private let candidates: [URL]
+    private let candidates: [URL]?
     private let timeout: TimeInterval
     private let lock = NSLock()
     private var isRunning = false
 
-    init(candidates: [URL] = CodeBurnRunner.defaultCandidates(home: FileManager.default.homeDirectoryForCurrentUser),
-         timeout: TimeInterval = 60) {
+    /// `nil` candidates are rediscovered on every run, so a CLI installed later is found.
+    init(candidates: [URL]? = nil, timeout: TimeInterval = 60) {
         self.candidates = candidates
         self.timeout = timeout
     }
@@ -58,7 +58,7 @@ final class CodeBurnRunner: @unchecked Sendable {
     /// the CLI (drops NODE_OPTIONS, NODE_PATH, DYLD_* and friends). PATH leads with the
     /// chosen binary's directory, so a `#!/usr/bin/env node` shebang finds the node installed
     /// next to it; trusting that directory is the same trust as executing the binary.
-    static func childEnvironment(parent: [String: String], home: URL, binary: URL, candidates: [URL]) -> [String: String] {
+    static func childEnvironment(parent: [String: String], home: URL, binary: URL) -> [String: String] {
         var env = ["HOME": home.path, "NODE_ENV": "production"]
         for key in ["USER", "TMPDIR", "LANG"] {
             env[key] = parent[key]
@@ -78,13 +78,14 @@ final class CodeBurnRunner: @unchecked Sendable {
     /// other XPC messages on the same connection (brightness) are not held up.
     func run(period: String, reply: @escaping (Data?, String?) -> Void) {
         guard Self.allowedPeriods.contains(period) else { return reply(nil, "failed") }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = self.candidates ?? Self.defaultCandidates(home: home)
         guard let binary = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
             return reply(nil, "not-installed")
         }
         guard claim() else { return reply(nil, "busy") }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let environment = Self.childEnvironment(parent: ProcessInfo.processInfo.environment, home: home, binary: binary, candidates: candidates)
+        let environment = Self.childEnvironment(parent: ProcessInfo.processInfo.environment, home: home, binary: binary)
         let arguments = [binary.path, "status", "--format", "menubar-json", "--period", period, "--no-optimize"]
         var outFds: [Int32] = [0, 0]
         var errFds: [Int32] = [0, 0]
@@ -201,6 +202,16 @@ final class CodeBurnRunner: @unchecked Sendable {
         }
 
         DispatchQueue.global().async {
+            // Wait without reaping: the zombie leader keeps its pgid from being reused, so the
+            // group kill below cannot hit an unrelated process.
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+            queue.sync {
+                // A clean exit leaves the group alone; a failed, timed-out or overflowed run
+                // must not leave TERM-ignoring descendants behind.
+                let cleanExit = info.si_code == CLD_EXITED && info.si_status == 0
+                if timedOut || overflowed || !cleanExit { kill(-pid, SIGKILL) }
+            }
             var status: Int32 = 0
             while waitpid(pid, &status, 0) == -1 {
                 if errno == EINTR { continue }
