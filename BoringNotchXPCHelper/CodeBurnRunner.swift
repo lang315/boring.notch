@@ -205,12 +205,13 @@ final class CodeBurnRunner: @unchecked Sendable {
             // Wait without reaping: the zombie leader keeps its pgid from being reused, so the
             // group kill below cannot hit an unrelated process.
             var info = siginfo_t()
-            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+            var waited: Int32
+            repeat { waited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) } while waited == -1 && errno == EINTR
             queue.sync {
                 // A clean exit leaves the group alone; a failed, timed-out or overflowed run
-                // must not leave TERM-ignoring descendants behind.
+                // must not leave TERM-ignoring descendants behind. Only while the zombie holds the pgid.
                 let cleanExit = info.si_code == CLD_EXITED && info.si_status == 0
-                if timedOut || overflowed || !cleanExit { kill(-pid, SIGKILL) }
+                if waited == 0 && (timedOut || overflowed || !cleanExit) { kill(-pid, SIGKILL) }
             }
             var status: Int32 = 0
             while waitpid(pid, &status, 0) == -1 {
