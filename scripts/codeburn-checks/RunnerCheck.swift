@@ -32,18 +32,32 @@ enum RunnerCheck {
         check(candidates.map(\.path) == [
             "/opt/homebrew/bin/codeburn", "/usr/local/bin/codeburn",
             "/Users/tester/.npm-global/bin/codeburn", "/Users/tester/.local/bin/codeburn",
-            "/Users/tester/.volta/bin/codeburn",
+            "/Users/tester/.volta/bin/codeburn", "/Users/tester/.bun/bin/codeburn",
+            "/Users/tester/Library/pnpm/codeburn",
         ], "default candidates: \(candidates.map(\.path))")
         let env = CodeBurnRunner.childEnvironment(
             parent: ["USER": "tester", "TMPDIR": "/tmp/x", "LANG": "en_US.UTF-8", "HOME": "/elsewhere",
                      "NODE_OPTIONS": "--inspect", "NODE_PATH": "/evil", "DYLD_INSERT_LIBRARIES": "/evil.dylib",
                      "PATH": "/evil/bin"],
-            home: home, candidates: candidates)
+            home: home, binary: URL(fileURLWithPath: "/Users/tester/.nvm/versions/node/v20.1.0/bin/codeburn"),
+            candidates: candidates)
         check(Set(env.keys) == ["HOME", "USER", "TMPDIR", "LANG", "PATH", "NODE_ENV"], "env keys: \(env.keys.sorted())")
         check(env["HOME"] == "/Users/tester", "HOME comes from the resolved home, not the parent")
         check(env["NODE_ENV"] == "production", "NODE_ENV")
-        check(env["PATH"] == "/opt/homebrew/opt/node/bin:/opt/homebrew/bin:/usr/local/bin:/Users/tester/.npm-global/bin:/Users/tester/.local/bin:/Users/tester/.volta/bin:/usr/bin:/bin",
+        check(env["PATH"] == "/Users/tester/.nvm/versions/node/v20.1.0/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/bin:/usr/local/bin:/Users/tester/.npm-global/bin:/Users/tester/.local/bin:/Users/tester/.volta/bin:/usr/bin:/bin",
               "PATH: \(env["PATH"] ?? "nil")")
+
+        // Version-manager discovery: newest first, missing managers contribute nothing.
+        let nvmHome = dir.appendingPathComponent("home")
+        for v in ["v18.0.0", "v20.1.0"] {
+            try FileManager.default.createDirectory(
+                at: nvmHome.appendingPathComponent(".nvm/versions/node/\(v)/bin"), withIntermediateDirectories: true)
+        }
+        let nvmPaths = CodeBurnRunner.defaultCandidates(home: nvmHome).map(\.path)
+        let i20 = nvmPaths.firstIndex { $0.contains("v20.1.0/bin/codeburn") }
+        let i18 = nvmPaths.firstIndex { $0.contains("v18.0.0/bin/codeburn") }
+        check(i20 != nil && i18 != nil && i20! < i18!, "nvm versions newest first: \(nvmPaths)")
+        check(nvmPaths.count == candidates.count + 2, "missing managers add nothing: \(nvmPaths)")
 
         // Allowlist and resolution.
         let missing = CodeBurnRunner(candidates: [dir.appendingPathComponent("missing")])
@@ -94,35 +108,54 @@ enum RunnerCheck {
         check(grandchild > 0 && kill(grandchild, 0) != 0, "grandchild \(grandchild) was killed with the process group")
         check(call(slow, "today").code == "timeout", "runner is free again after a timeout")
 
-        // A descendant that leaves the process group keeps the pipes open: the runner
-        // must still reply "timeout" once and free itself instead of staying busy.
+        // Exit is authoritative: a clean exit whose descendant left the process group and
+        // still holds the pipes replies with success at once, not after a timeout.
         let escapedPidFile = dir.appendingPathComponent("escaped.pid")
         func killEscaped() {
-            let pid = pid_t((try? String(contentsOf: escapedPidFile, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
-            if pid > 0 { kill(pid, SIGKILL) }
+            // The reply no longer waits for the descendant, so its pid file may not exist yet.
+            for _ in 0..<50 {
+                let pid = pid_t((try? String(contentsOf: escapedPidFile, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+                if pid > 0 {
+                    kill(pid, SIGKILL)
+                    try? FileManager.default.removeItem(at: escapedPidFile)
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
         }
         let escaper = CodeBurnRunner(candidates: [try fake("escape", """
             perl -e 'use POSIX; POSIX::setsid(); open(F, ">", $ARGV[0]); print F $$; close F; sleep 20' '\(escapedPidFile.path)' &
             exit 0
-            """)], timeout: 1)
-        var escapeReplies = 0
-        var escapeCode: String?
-        let escaped = DispatchSemaphore(value: 0)
-        escaper.run(period: "today") { _, code in
-            escapeReplies += 1
-            escapeCode = code
-            escaped.signal()
-        }
-        let escapedReplied = escaped.wait(timeout: .now() + 8) == .success
+            """)], timeout: 10)
+        let escapedResult = call(escaper, "today", wait: 3)
         killEscaped()
-        check(escapedReplied, "escaped descendant: no reply within 8s")
-        check(escapeCode == "timeout", "escaped descendant code: \(escapeCode ?? "nil")")
+        check(escapedResult.code == nil && escapedResult.data == Data(),
+              "escaped descendant: clean exit is success, got \(escapedResult.code ?? "data")")
         Thread.sleep(forTimeInterval: 1)
-        check(escapeReplies == 1, "escaped descendant: exactly one reply, got \(escapeReplies)")
-        let afterEscape = call(escaper, "today", wait: 8).code
+        let afterEscape = call(escaper, "today", wait: 3)
         killEscaped()
-        check(afterEscape == "timeout", "runner is free after an escaped descendant: \(afterEscape ?? "nil")")
+        check(afterEscape.code == nil, "runner is free after an escaped descendant: \(afterEscape.code ?? "nil")")
+
+        // The spawned child must not inherit the caller thread's blocked signals.
+        let marker = dir.appendingPathComponent("term.marker")
+        let sigRunner = CodeBurnRunner(candidates: [try fake("sig",
+            "trap 'echo term > \"\(marker.path)\"; exit 0' TERM; while :; do sleep 0.1; done")], timeout: 1)
+        let sigDone = DispatchSemaphore(value: 0)
+        var sigCode: String?
+        DispatchQueue.global().async {
+            var set = sigset_t()
+            sigemptyset(&set)
+            sigaddset(&set, SIGTERM)
+            pthread_sigmask(SIG_BLOCK, &set, nil)
+            sigRunner.run(period: "today") { _, code in
+                sigCode = code
+                sigDone.signal()
+            }
+        }
+        check(sigDone.wait(timeout: .now() + 8) == .success, "signal case: no reply")
+        check(sigCode == "timeout", "signal case code: \(sigCode ?? "nil")")
+        check(FileManager.default.fileExists(atPath: marker.path), "child received SIGTERM despite blocked mask")
 
         print("RunnerCheck OK")
     }

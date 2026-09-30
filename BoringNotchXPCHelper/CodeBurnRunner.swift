@@ -4,7 +4,7 @@
 //
 //  Runs the user's `codeburn` CLI for the app's CodeBurn tab. The sandboxed app
 //  cannot read ~/.claude and friends, so this unsandboxed helper spawns the CLI.
-//  Foundation-only so scripts/codeburn-check.sh can compile it standalone.
+//  Foundation-only (Dispatch/Darwin come with it) so scripts/codeburn-check.sh can compile it standalone.
 //
 
 import Foundation
@@ -28,22 +28,44 @@ final class CodeBurnRunner: @unchecked Sendable {
     }
 
     static func defaultCandidates(home: URL) -> [URL] {
-        ["/opt/homebrew/bin/codeburn", "/usr/local/bin/codeburn"].map { URL(fileURLWithPath: $0) }
+        let fixed = ["/opt/homebrew/bin/codeburn", "/usr/local/bin/codeburn"].map { URL(fileURLWithPath: $0) }
             + [".npm-global/bin", ".local/bin", ".volta/bin"].map {
                 home.appendingPathComponent($0).appendingPathComponent("codeburn")
             }
+        let direct = [".bun/bin/codeburn", "Library/pnpm/codeburn"].map { home.appendingPathComponent($0) }
+        // Version managers keep one install per node version; list those that exist, newest first.
+        let managers: [(root: String, suffix: String)] = [
+            (".nvm/versions/node", "bin"), (".asdf/installs/nodejs", "bin"),
+            (".local/share/mise/installs/node", "bin"), ("Library/Application Support/fnm/node-versions", "installation/bin"),
+        ]
+        var versioned: [URL] = []
+        for manager in managers {
+            let root = home.appendingPathComponent(manager.root)
+            let versions = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+                .sorted { $0.localizedStandardCompare($1) == .orderedDescending }
+            for version in versions {
+                versioned.append(root.appendingPathComponent(version).appendingPathComponent(manager.suffix)
+                    .appendingPathComponent("codeburn"))
+            }
+        }
+        return fixed + direct + versioned
     }
 
-    /// Explicit allowlist: nothing else from the helper's environment reaches the CLI
-    /// (drops NODE_OPTIONS, NODE_PATH, DYLD_* and friends). The node directory comes
-    /// first so a `#!/usr/bin/env node` shebang can't pick up a planted `node`.
-    static func childEnvironment(parent: [String: String], home: URL, candidates: [URL]) -> [String: String] {
+    private static let fixedCandidateCount = 5
+
+    /// Explicit allowlist: nothing from the helper's own environment (PATH included) reaches
+    /// the CLI (drops NODE_OPTIONS, NODE_PATH, DYLD_* and friends). PATH leads with the
+    /// chosen binary's directory, so a `#!/usr/bin/env node` shebang finds the node installed
+    /// next to it; trusting that directory is the same trust as executing the binary.
+    static func childEnvironment(parent: [String: String], home: URL, binary: URL, candidates: [URL]) -> [String: String] {
         var env = ["HOME": home.path, "NODE_ENV": "production"]
         for key in ["USER", "TMPDIR", "LANG"] {
             env[key] = parent[key]
         }
-        var path = ["/opt/homebrew/opt/node/bin"]
-        for dir in candidates.map({ $0.deletingLastPathComponent().path }) + ["/usr/bin", "/bin"] where !path.contains(dir) {
+        var path: [String] = []
+        let dirs = [binary.deletingLastPathComponent().path, "/opt/homebrew/opt/node/bin"]
+            + candidates.prefix(fixedCandidateCount).map { $0.deletingLastPathComponent().path } + ["/usr/bin", "/bin"]
+        for dir in dirs where !path.contains(dir) {
             path.append(dir)
         }
         env["PATH"] = path.joined(separator: ":")
@@ -61,36 +83,119 @@ final class CodeBurnRunner: @unchecked Sendable {
         guard claim() else { return reply(nil, "busy") }
 
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let environment = Self.childEnvironment(parent: ProcessInfo.processInfo.environment, home: home, candidates: candidates)
+        let environment = Self.childEnvironment(parent: ProcessInfo.processInfo.environment, home: home, binary: binary, candidates: candidates)
         let arguments = [binary.path, "status", "--format", "menubar-json", "--period", period, "--no-optimize"]
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        guard let pid = Self.spawn(arguments: arguments, environment: environment,
-                                   stdout: stdoutPipe.fileHandleForWriting.fileDescriptor,
-                                   stderr: stderrPipe.fileHandleForWriting.fileDescriptor) else {
+        var outFds: [Int32] = [0, 0]
+        var errFds: [Int32] = [0, 0]
+        guard pipe(&outFds) == 0 else { release(); return reply(nil, "failed") }
+        guard pipe(&errFds) == 0 else {
+            close(outFds[0]); close(outFds[1])
             release()
             return reply(nil, "failed")
         }
-        // Keep only the read ends so EOF arrives once the child group is gone.
-        try? stdoutPipe.fileHandleForWriting.close()
-        try? stderrPipe.fileHandleForWriting.close()
+        let pid = Self.spawn(arguments: arguments, environment: environment, stdout: outFds[1], stderr: errFds[1])
+        // Keep only the read ends; the child holds the write ends.
+        close(outFds[1])
+        close(errFds[1])
+        guard let pid else {
+            close(outFds[0]); close(errFds[0])
+            release()
+            return reply(nil, "failed")
+        }
+        for fd in [outFds[0], errFds[0]] {
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        }
 
-        let job = Job()
-        let done = DispatchGroup()
-        for (pipe, isStdout) in [(stdoutPipe, true), (stderrPipe, false)] {
-            done.enter()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    handle.readabilityHandler = nil
-                    done.leave()
-                } else if !job.append(chunk, toStdout: isStdout) {
+        // All job state lives on this queue, so handlers never race each other or a close.
+        let queue = DispatchQueue(label: "codeburn.run")
+        var stdout = Data()
+        var stderr = Data()
+        var timedOut = false
+        var overflowed = false
+        var finished = false
+        var sources: [DispatchSourceRead] = []
+        var timers: [DispatchWorkItem] = []
+
+        func append(_ chunk: Data, toStdout: Bool) {
+            if toStdout {
+                if overflowed { return }
+                stdout.append(chunk)
+                if stdout.count > Self.maxOutputBytes {
+                    overflowed = true
+                    stdout = Data()
                     kill(-pid, SIGKILL)
+                }
+            } else if stderr.count < 64 * 1024 {
+                stderr.append(chunk.prefix(64 * 1024 - stderr.count))
+            }
+        }
+        var atEOF = [false, false] // [stdout, stderr]: the fd may be closed after EOF
+        /// Reads until the fd is empty (EAGAIN) or at EOF; returns true at EOF.
+        @discardableResult
+        func drain(_ fd: Int32, toStdout: Bool) -> Bool {
+            let index = toStdout ? 0 : 1
+            if atEOF[index] { return true }
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            while true {
+                let n = read(fd, &buffer, buffer.count)
+                if n > 0 {
+                    append(Data(buffer[0..<n]), toStdout: toStdout)
+                } else if n == 0 {
+                    atEOF[index] = true
+                    return true
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    return false // EAGAIN/EWOULDBLOCK: nothing more buffered
                 }
             }
         }
-        done.enter()
+        func finish(status: Int32) {
+            if finished { return }
+            finished = true
+            timers.forEach { $0.cancel() }
+            sources.forEach { $0.cancel() } // cancel handlers close the fds
+            release()
+            let exitedCleanly = status & 0x7f == 0 && (status >> 8) & 0xff == 0
+            if timedOut {
+                Self.log.error("codeburn timed out after \(self.timeout)s")
+                reply(nil, "timeout")
+            } else if overflowed {
+                Self.log.error("codeburn stdout exceeded \(Self.maxOutputBytes) bytes")
+                reply(nil, "failed")
+            } else if exitedCleanly {
+                reply(stdout, nil)
+            } else {
+                Self.log.error("codeburn failed (status \(status)): \(String(decoding: stderr, as: UTF8.self))")
+                reply(nil, "failed")
+            }
+        }
+
+        for (fd, isStdout) in [(outFds[0], true), (errFds[0], false)] {
+            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+            source.setEventHandler { [unowned source] in
+                // EOF leaves the fd readable forever: stop watching it. The reaper decides completion.
+                if drain(fd, toStdout: isStdout) { source.cancel() }
+            }
+            source.setCancelHandler { close(fd) }
+            sources.append(source)
+        }
+        sources.forEach { $0.resume() }
+
+        func schedule(after seconds: TimeInterval, _ body: @escaping () -> Void) {
+            let item = DispatchWorkItem(block: body)
+            timers.append(item)
+            queue.asyncAfter(deadline: .now() + seconds, execute: item)
+        }
+        schedule(after: timeout) {
+            if finished { return }
+            timedOut = true
+            kill(-pid, SIGTERM)
+            schedule(after: 2) {
+                if !finished { kill(-pid, SIGKILL) }
+            }
+        }
+
         DispatchQueue.global().async {
             var status: Int32 = 0
             while waitpid(pid, &status, 0) == -1 {
@@ -98,56 +203,12 @@ final class CodeBurnRunner: @unchecked Sendable {
                 status = 1 << 8 // reaping failed: never report success
                 break
             }
-            job.setStatus(status)
-            done.leave()
-        }
-        // Whichever of the pipe-EOF path and the escape path wins job.finish() replies and
-        // releases; the loser does neither (a late release() would clear a newer run's claim).
-        let conclude = { [self] (result: Job.Result, escaped: Bool) in
-            // The pipes must outlive run(): dropping them closes the read ends and the
-            // child dies of SIGPIPE on its first write.
-            withExtendedLifetime((stdoutPipe, stderrPipe)) {
-                if escaped {
-                    for pipe in [stdoutPipe, stderrPipe] {
-                        pipe.fileHandleForReading.readabilityHandler = nil
-                        try? pipe.fileHandleForReading.close()
-                    }
-                }
+            queue.async {
+                // The child is gone, so everything it wrote already sits in the pipe buffers.
+                drain(outFds[0], toStdout: true)
+                drain(errFds[0], toStdout: false)
+                finish(status: status)
             }
-            release()
-            let exitedCleanly = result.status & 0x7f == 0 && (result.status >> 8) & 0xff == 0
-            if result.timedOut {
-                Self.log.error("codeburn timed out after \(self.timeout)s")
-                reply(nil, "timeout")
-            } else if result.overflowed {
-                Self.log.error("codeburn stdout exceeded \(Self.maxOutputBytes) bytes")
-                reply(nil, "failed")
-            } else if exitedCleanly {
-                reply(result.stdout, nil)
-            } else {
-                let stderr = String(decoding: result.stderr, as: UTF8.self)
-                Self.log.error("codeburn failed (status \(result.status)): \(stderr, privacy: .public)")
-                reply(nil, "failed")
-            }
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-            guard job.markTimedOut() else { return }
-            kill(-pid, SIGTERM)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                if job.isFinished { return }
-                kill(-pid, SIGKILL)
-                // A descendant that left the group (setsid) can still hold the pipes open,
-                // so EOF may never come: stop waiting for it.
-                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                    guard let result = job.finish() else { return }
-                    Self.log.error("codeburn descendant escaped the process group and kept the pipes open")
-                    conclude(result, true)
-                }
-            }
-        }
-        done.notify(queue: .global()) {
-            guard let result = job.finish() else { return }
-            conclude(result, false)
         }
     }
 
@@ -176,7 +237,15 @@ final class CodeBurnRunner: @unchecked Sendable {
             posix_spawnattr_destroy(&attr)
             posix_spawn_file_actions_destroy(&actions)
         }
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
+        // The caller's thread may have signals blocked or ignored; the child must start clean.
+        var emptyMask = sigset_t()
+        var allSignals = sigset_t()
+        sigemptyset(&emptyMask)
+        sigfillset(&allSignals)
+        posix_spawnattr_setsigmask(&attr, &emptyMask)
+        posix_spawnattr_setsigdefault(&attr, &allSignals)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+            | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
         posix_spawnattr_setpgroup(&attr, 0)
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, stdout, 1)
@@ -188,62 +257,5 @@ final class CodeBurnRunner: @unchecked Sendable {
 
         var pid: pid_t = 0
         return posix_spawn(&pid, arguments[0], &actions, &attr, argv, envp) == 0 ? pid : nil
-    }
-
-    /// State shared by the pipe readers, the reaper and the timeout, behind one lock.
-    private final class Job: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stdout = Data()
-        private var stderr = Data()
-        private var status: Int32 = 0
-        private var timedOut = false
-        private var overflowed = false
-        private var finished = false
-
-        /// Returns false once stdout is over the cap.
-        func append(_ chunk: Data, toStdout: Bool) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            if overflowed { return false }
-            if toStdout {
-                stdout.append(chunk)
-                overflowed = stdout.count > CodeBurnRunner.maxOutputBytes
-            } else if stderr.count < 64 * 1024 {
-                stderr.append(chunk)
-            }
-            return !overflowed
-        }
-
-        func setStatus(_ value: Int32) {
-            lock.lock()
-            status = value
-            lock.unlock()
-        }
-
-        /// False when the run already finished, so a late timer does nothing.
-        func markTimedOut() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            if finished { return false }
-            timedOut = true
-            return true
-        }
-
-        var isFinished: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return finished
-        }
-
-        typealias Result = (stdout: Data, stderr: Data, status: Int32, timedOut: Bool, overflowed: Bool)
-
-        /// The result on the first call only; later calls get nil, so exactly one path replies.
-        func finish() -> Result? {
-            lock.lock()
-            defer { lock.unlock() }
-            if finished { return nil }
-            finished = true
-            return (stdout, stderr, status, timedOut, overflowed)
-        }
     }
 }
