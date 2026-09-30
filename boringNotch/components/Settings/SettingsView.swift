@@ -1159,7 +1159,6 @@ struct Shelf: View {
 
 struct Appearance: View {
     @ObservedObject var coordinator = BoringViewCoordinator.shared
-    @Default(.showCodeBurnTab) var showCodeBurnTab
     @Default(.mirrorShape) var mirrorShape
     @Default(.sliderColor) var sliderColor
     @Default(.useMusicVisualizer) var useMusicVisualizer
@@ -1183,11 +1182,6 @@ struct Appearance: View {
                         Text("Runs your locally installed codeburn CLI to show AI coding spend. macOS may ask Boring Notch for access to other apps' data.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                }
-                .onChange(of: showCodeBurnTab) {
-                    if !showCodeBurnTab && coordinator.currentView == .codeburn {
-                        coordinator.currentView = .home
                     }
                 }
                 Defaults.Toggle(key: .settingsIconInNotch) {

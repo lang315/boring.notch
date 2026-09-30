@@ -18,9 +18,9 @@ struct TabModel: Identifiable {
 
     /// One gate per tab. The bar shows only when more than one tab is visible, which
     /// keeps the pre-CodeBurn behaviour when the CodeBurn tab is off.
-    static func visible(shelfEnabled: Bool, shelfEmpty: Bool, alwaysShowTabs: Bool, codeBurnEnabled: Bool) -> [TabModel] {
+    static func visible(shelfEnabled: Bool, shelfEmpty: Bool, alwaysShowTabs: Bool, codeBurnEnabled: Bool, currentView: NotchViews) -> [TabModel] {
         var tabs = [TabModel(label: "Home", icon: "house.fill", view: .home)]
-        if shelfEnabled && (!shelfEmpty || alwaysShowTabs) {
+        if shelfEnabled && (!shelfEmpty || alwaysShowTabs || (codeBurnEnabled && currentView == .shelf)) {
             tabs.append(TabModel(label: "Shelf", icon: "tray.fill", view: .shelf))
         }
         if codeBurnEnabled {
@@ -39,7 +39,7 @@ struct TabSelectionView: View {
 
     private var tabs: [TabModel] {
         TabModel.visible(shelfEnabled: boringShelf, shelfEmpty: tvm.isEmpty,
-                         alwaysShowTabs: coordinator.alwaysShowTabs, codeBurnEnabled: showCodeBurnTab)
+                         alwaysShowTabs: coordinator.alwaysShowTabs, codeBurnEnabled: showCodeBurnTab, currentView: coordinator.currentView)
     }
 
     var body: some View {

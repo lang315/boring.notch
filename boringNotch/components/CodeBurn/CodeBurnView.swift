@@ -11,7 +11,7 @@ struct CodeBurnView: View {
     @ObservedObject var manager = CodeBurnManager.shared
 
     private struct Row: Identifiable {
-        let id: String
+        let id: Int
         let name: String
         let cost: String
         /// Cost relative to the largest in its column (0...1); sizes the spend bar.
@@ -57,11 +57,13 @@ struct CodeBurnView: View {
             }
             Spacer(minLength: 4)
             if let date = manager.current.payload?.generatedDate {
-                Text(verbatim: CodeBurnPayload.ageText(since: date))
-                    .font(.caption2)
-                    .foregroundStyle(.gray)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(verbatim: CodeBurnPayload.ageText(since: date, now: context.date))
+                        .font(.caption2)
+                        .foregroundStyle(.gray)
+                }
             }
-            if manager.current.status == .loading {
+            if manager.current.status == .loading || manager.isFetching {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(ember)
@@ -150,10 +152,10 @@ struct CodeBurnView: View {
             let projects = current.topProjects.prefix(4)
             let projectMax = projects.map(\.cost).max() ?? 0
             list("MODELS",
-                 rows: models.map { Row(id: $0.name, name: $0.name, cost: payload.formatCost($0.cost), share: modelMax > 0 ? $0.cost / modelMax : 0) },
+                 rows: models.enumerated().map { Row(id: $0.offset, name: $0.element.name, cost: payload.formatCost($0.element.cost), share: modelMax > 0 ? $0.element.cost / modelMax : 0) },
                  footer: current.unpricedModelCount > 0 ? "+\(current.unpricedModelCount) unpriced" : nil)
             list("PROJECTS",
-                 rows: projects.map { Row(id: $0.rowID, name: $0.name, cost: payload.formatCost($0.cost), share: projectMax > 0 ? $0.cost / projectMax : 0) },
+                 rows: projects.enumerated().map { Row(id: $0.offset, name: $0.element.name, cost: payload.formatCost($0.element.cost), share: projectMax > 0 ? $0.element.cost / projectMax : 0) },
                  footer: nil)
         }
     }

@@ -100,6 +100,7 @@ class BoringViewCoordinator: ObservableObject {
     @Published var optionKeyPressed: Bool = true
     private var accessibilityObserver: Any?
     private var hudReplacementCancellable: AnyCancellable?
+    private var codeBurnTabCancellable: AnyCancellable?
 
     private init() {
         // Perform migration from name-based to UUID-based storage
@@ -134,6 +135,17 @@ class BoringViewCoordinator: ObservableObject {
                 }
             }
         }
+
+        // Leave the CodeBurn view when its tab is turned off
+        codeBurnTabCancellable = Defaults.publisher(.showCodeBurnTab)
+            .sink { [weak self] change in
+                Task { @MainActor in
+                    guard let self = self else { return }
+                    if change.newValue == false && self.currentView == .codeburn {
+                        self.currentView = .home
+                    }
+                }
+            }
 
         // Observe changes to hudReplacement
         hudReplacementCancellable = Defaults.publisher(.hudReplacement)

@@ -20,7 +20,8 @@ struct BoringHeader: View {
             HStack {
                 if TabModel.visible(shelfEnabled: boringShelf, shelfEmpty: tvm.isEmpty,
                                     alwaysShowTabs: coordinator.alwaysShowTabs,
-                                    codeBurnEnabled: showCodeBurnTab).count > 1 {
+                                    codeBurnEnabled: showCodeBurnTab,
+                                    currentView: coordinator.currentView).count > 1 {
                     TabSelectionView()
                 } else if vm.notchState == .open {
                     EmptyView()
