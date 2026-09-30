@@ -73,13 +73,9 @@ struct CodeBurnPayload: Decodable, Equatable {
     }
 
     struct Project: Decodable, Equatable {
-        /// Full project path when the CLI knows it.
-        let id: String?
         /// Folder basename; two projects can share it.
         let name: String
         let cost: Double
-
-        var rowID: String { id ?? name }
     }
 
     struct Current: Decodable, Equatable {

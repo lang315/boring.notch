@@ -18,7 +18,7 @@ enum PayloadCheck {
         check(p.sessionsText == "≥45", "partial sessions: \(p.sessionsText)")
         check(p.pricedModels.map(\.name) == ["Opus 5.5", "Sonnet 5.5", "Haiku 4.5", "GPT-5"], "priced models: \(p.pricedModels.map(\.name))")
         check(p.current.unpricedModelCount == 1, "unpriced count")
-        check(p.current.topProjects.map(\.rowID) == ["/Users/dev/work/alpha", "/Users/dev/other/alpha", "beta"], "project row ids")
+        check(p.current.topProjects.map(\.name) == ["alpha", "alpha", "beta"], "project names")
         check(p.liveSessions?.count == 2, "live count")
         check(p.stale == nil, "stale absent")
         check(p.generatedDate != nil, "generated parses with fractional seconds")
