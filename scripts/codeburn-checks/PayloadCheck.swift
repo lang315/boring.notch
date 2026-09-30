@@ -57,9 +57,29 @@ enum PayloadCheck {
 
         // Freshness label.
         let base = Date(timeIntervalSince1970: 1_000_000)
-        check(CodeBurnPayload.ageText(since: base, now: base.addingTimeInterval(30)) == "now", "age now")
-        check(CodeBurnPayload.ageText(since: base, now: base.addingTimeInterval(240)) == "4m ago", "age minutes")
-        check(CodeBurnPayload.ageText(since: base, now: base.addingTimeInterval(7300)) == "2h ago", "age hours")
+        let us = Locale(identifier: "en_US")
+        func age(_ s: TimeInterval) -> String { CodeBurnPayload.ageText(since: base, now: base.addingTimeInterval(s), locale: us) }
+        check(age(30) == "now", "age now: \(age(30))")
+        check(age(240) == "4m ago", "age minutes: \(age(240))")
+        check(age(7300) == "2h ago", "age hours: \(age(7300))")
+        check(age(3 * 86400) == "3d ago", "age days: \(age(3 * 86400))")
+
+        // Currency digits come from the currency, and huge or non-finite values never trap.
+        func money(_ json: String, _ usd: Double) throws -> String {
+            try decode("""
+            {"generated":"2026-09-29T09:09:22Z","currency":\(json),
+             "current":{"label":"x","cost":0,"calls":0,"sessions":0,"cacheHitPercent":0,"topModels":[],"topProjects":[]}}
+            """).formatCost(usd)
+        }
+        let huge = try money(#"{"code":"JPY","symbol":"¥","rate":1e300}"#, 1)
+        check(huge.hasPrefix("¥") && !huge.contains("."), "huge JPY no trap, no decimals: \(huge)")
+        let vnd = try money(#"{"code":"VND","symbol":"₫","rate":25000}"#, 1)
+        let eur = try money(#"{"code":"EUR","symbol":"€","rate":0.9}"#, 1)
+        let inf = try money(#"{"code":"USD","symbol":"$","rate":1}"#, .infinity)
+        check(vnd == "₫25000", "VND 0 decimals: \(vnd)")
+        check(eur == "€0.90", "EUR 2 decimals: \(eur)")
+        check(!inf.isEmpty, "infinity no trap")
+        check(CodeBurnPeriod.allCases.map(\.title) == ["Today", "7d", "30d", "Month"], "period titles")
 
         // Periods match the helper allowlist; helper codes map to errors.
         check(CodeBurnPeriod.allCases.map(\.cliArg) == ["today", "week", "30days", "month"], "period cli args")

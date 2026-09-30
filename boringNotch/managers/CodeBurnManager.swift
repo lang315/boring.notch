@@ -30,7 +30,7 @@ final class CodeBurnManager: ObservableObject {
         didSet { refreshIfStale() }
     }
     @Published private(set) var entries: [CodeBurnPeriod: Entry] = [:]
-    private var inFlight = false
+    @Published private(set) var isFetching = false
 
     var current: Entry { entries[period] ?? Entry() }
 
@@ -43,23 +43,31 @@ final class CodeBurnManager: ObservableObject {
     /// One fetch at a time. The result lands on the period it was requested for, so
     /// switching periods mid-fetch never shows another period's numbers.
     func refresh() {
-        guard !inFlight else { return }
-        inFlight = true
+        guard !isFetching else { return }
+        isFetching = true
         let requested = period
         entries[requested, default: Entry()].status = .loading
         Task {
             let result = await XPCHelperClient.shared.codeBurnStatus(period: requested.cliArg)
-            apply(result, to: requested)
-            inFlight = false
+            var decoded: CodeBurnPayload?
+            if case .success(let data) = result {
+                decoded = await Task.detached { Self.decode(data) }.value
+            }
+            apply(result, decoded: decoded, to: requested)
+            isFetching = false
             if period != requested { refreshIfStale() }
         }
     }
 
-    private func apply(_ result: Result<Data, CodeBurnFetchError>, to period: CodeBurnPeriod) {
+    nonisolated static func decode(_ data: Data) -> CodeBurnPayload? {
+        try? JSONDecoder().decode(CodeBurnPayload.self, from: data)
+    }
+
+    private func apply(_ result: Result<Data, CodeBurnFetchError>, decoded: CodeBurnPayload?, to period: CodeBurnPeriod) {
         var entry = entries[period] ?? Entry()
         switch result {
-        case .success(let data):
-            if let payload = try? JSONDecoder().decode(CodeBurnPayload.self, from: data) {
+        case .success:
+            if let payload = decoded {
                 entry.payload = payload
                 entry.fetchedAt = Date()
                 entry.status = .idle

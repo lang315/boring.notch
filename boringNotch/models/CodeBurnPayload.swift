@@ -19,10 +19,10 @@ enum CodeBurnPeriod: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .today: return "Today"
-        case .week: return "7d"
-        case .thirtyDays: return "30d"
-        case .month: return "Month"
+        case .today: return String(localized: "Today")
+        case .week: return String(localized: "7d")
+        case .thirtyDays: return String(localized: "30d")
+        case .month: return String(localized: "Month")
         }
     }
 }
@@ -139,6 +139,8 @@ struct CodeBurnPayload: Decodable, Equatable {
     let current: Current
     /// Absent means "unknown", not zero.
     let liveSessions: LiveSessions?
+    /// `generated` parsed once at decode time.
+    let generatedDate: Date?
 
     private enum CodingKeys: String, CodingKey { case generated, stale, currency, current, liveSessions }
 
@@ -149,17 +151,26 @@ struct CodeBurnPayload: Decodable, Equatable {
         currency = try c.decodeIfPresent(Currency.self, forKey: .currency) ?? Currency()
         current = try c.decode(Current.self, forKey: .current)
         liveSessions = try c.decodeIfPresent(LiveSessions.self, forKey: .liveSessions)
+        generatedDate = Self.withFraction.date(from: generated) ?? Self.plain.date(from: generated)
     }
+
+    private static let withFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let plain = ISO8601DateFormatter()
 
     // MARK: - Display
 
-    /// Payload costs are USD. JPY and KRW have no minor unit.
+    /// Payload costs are USD. Fraction digits come from the currency (JPY 0, USD 2).
+    /// A fresh formatter per call keeps this thread-safe; it runs a handful of times per render.
     func formatCost(_ usd: Double) -> String {
-        let value = usd * currency.rate
-        if ["JPY", "KRW"].contains(currency.code) {
-            return "\(currency.symbol)\(Int(value.rounded()))"
-        }
-        return currency.symbol + String(format: "%.2f", value)
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.currencyCode = currency.code
+        return currency.symbol + String(format: "%.*f", Int32(f.maximumFractionDigits), usd * currency.rate)
     }
 
     var sessionsText: String {
@@ -170,19 +181,12 @@ struct CodeBurnPayload: Decodable, Equatable {
     /// $0 rows (local, free or unpriced models) are left out; unpriced ones are counted separately.
     var pricedModels: [Model] { current.topModels.filter { $0.cost > 0 } }
 
-    var generatedDate: Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: generated) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: generated)
-    }
-
     /// Freshness of the data itself (the CLI may serve a saved snapshot), not of the fetch.
-    static func ageText(since date: Date, now: Date = Date()) -> String {
-        let minutes = Int(max(0, now.timeIntervalSince(date)) / 60)
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m ago" }
-        return "\(minutes / 60)h ago"
+    static func ageText(since date: Date, now: Date = Date(), locale: Locale = .current) -> String {
+        if now.timeIntervalSince(date) < 60 { return String(localized: "now") }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        f.locale = locale
+        return f.localizedString(for: date, relativeTo: now)
     }
 }

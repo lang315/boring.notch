@@ -33,6 +33,7 @@ enum ManagerCheck {
 
         // Switching period mid-fetch: the result lands on the period it was requested for.
         m.refresh()
+        check(m.isFetching, "isFetching true right after refresh")
         m.period = .week
         try await sleep(100)
         check(client.calls == ["today"], "one fetch in flight: \(client.calls)")
@@ -44,6 +45,7 @@ enum ManagerCheck {
         try await sleep(350)
         check(m.current.payload?.current.label == "week", "week shows week data")
         check(m.current.status == .idle, "week idle after success")
+        check(!m.isFetching, "isFetching false after all fetches")
 
         // Fresh cache: no refetch.
         m.refreshIfStale()
