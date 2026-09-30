@@ -701,6 +701,12 @@
         }
       }
     },
+    "%@ calls" : {
+
+    },
+    "%@ sessions" : {
+
+    },
     "%d%%" : {
       "localizations" : {
         "ar" : {
@@ -901,6 +907,9 @@
         }
       }
     },
+    "%lld active ≤10m" : {
+
+    },
     "%lld%%" : {
       "localizations" : {
         "ar" : {
@@ -1000,6 +1009,9 @@
           }
         }
       }
+    },
+    "%lld%% cache" : {
+
     },
     "• Bug fixes" : {
       "localizations" : {
@@ -1300,6 +1312,15 @@
           }
         }
       }
+    },
+    "+%lld unpriced" : {
+
+    },
+    "7d" : {
+
+    },
+    "30d" : {
+
     },
     "About" : {
       "localizations" : {
@@ -5602,6 +5623,9 @@
         }
       }
     },
+    "CodeBurn CLI not found" : {
+
+    },
     "Color Presets" : {
       "localizations" : {
         "ar" : {
@@ -6201,6 +6225,12 @@
           }
         }
       }
+    },
+    "Couldn't load CodeBurn data" : {
+
+    },
+    "Couldn't refresh CodeBurn" : {
+
     },
     "Currently selected: %@" : {
       "localizations" : {
@@ -13909,6 +13939,12 @@
         }
       }
     },
+    "MODELS" : {
+
+    },
+    "Month" : {
+
+    },
     "More" : {
       "localizations" : {
         "ar" : {
@@ -15010,6 +15046,9 @@
         }
       }
     },
+    "No usage in this period" : {
+
+    },
     "Not Now" : {
       "localizations" : {
         "ar" : {
@@ -15509,6 +15548,9 @@
           }
         }
       }
+    },
+    "now" : {
+
     },
     "Open Calendar Settings" : {
       "localizations" : {
@@ -16510,6 +16552,9 @@
         }
       }
     },
+    "PROJECTS" : {
+
+    },
     "Quick Share" : {
       "localizations" : {
         "ar" : {
@@ -16909,6 +16954,9 @@
           }
         }
       }
+    },
+    "Refresh" : {
+
     },
     "Release name" : {
       "localizations" : {
@@ -18112,6 +18160,9 @@
         }
       }
     },
+    "Runs your locally installed codeburn CLI to show AI coding spend. macOS may ask Boring Notch for access to other apps' data." : {
+
+    },
     "Select the music source you want to use. You can change this later in the app settings." : {
       "localizations" : {
         "ar" : {
@@ -19011,6 +19062,9 @@
           }
         }
       }
+    },
+    "Show CodeBurn tab" : {
+
     },
     "Show cool face animation while inactive" : {
       "localizations" : {
@@ -21414,6 +21468,9 @@
         }
       }
     },
+    "Today" : {
+
+    },
     "Toggle Notch Open:" : {
       "localizations" : {
         "ar" : {
@@ -21713,6 +21770,9 @@
           }
         }
       }
+    },
+    "Unexpected CodeBurn output (CLI version?)" : {
+
     },
     "Uninstall" : {
       "extractionState" : "stale",

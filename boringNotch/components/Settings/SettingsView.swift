@@ -1176,6 +1176,14 @@ struct Appearance: View {
         Form {
             Section {
                 Toggle("Always show tabs", isOn: $coordinator.alwaysShowTabs)
+                Defaults.Toggle(key: .showCodeBurnTab) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show CodeBurn tab")
+                        Text("Runs your locally installed codeburn CLI to show AI coding spend. macOS may ask Boring Notch for access to other apps' data.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Defaults.Toggle(key: .settingsIconInNotch) {
                     Text("Show settings icon in notch")
                 }

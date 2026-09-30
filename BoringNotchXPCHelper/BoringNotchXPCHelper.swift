@@ -139,6 +139,15 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
         reply(false)
     }
 
+    // MARK: - CodeBurn
+
+    private static let codeBurn = CodeBurnRunner()
+
+    /// Returns immediately; CodeBurnRunner replies when the CLI finishes.
+    @objc func fetchCodeBurnStatus(period: String, with reply: @escaping (Data?, String?) -> Void) {
+        Self.codeBurn.run(period: period, reply: reply)
+    }
+
     // MARK: - Private helpers for DisplayServices / IOKit access
     private func displayServicesGetBrightness(displayID: CGDirectDisplayID, out: inout Float) -> Bool {
         guard let sym = dlsym(DisplayServicesHandle.handle, "DisplayServicesGetBrightness") else { return false }
